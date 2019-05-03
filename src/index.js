@@ -48,9 +48,8 @@ class MessagePublisher {
     this.opIdMap = {}
     this.opEmitter = new EventEmitter()
     this.scanForUncommittedOps = this.scanForUncommittedOps.bind(this)
-    this.scanForOldOps = this.scanForOldOps.bind(this)
     this.commitOp = this.commitOp.bind(this)
-    this.publish = this.publish.bind(this)
+    this.bulkPublish = this.bulkPublish.bind(this)
     this.listenForInserts = this.listenForInserts.bind(this)
   }
 
@@ -141,4 +140,4 @@ class MessagePublisher {
   }
 }
 
-module.exports = new MessagePublisher()
+module.exports = MessagePublisher
