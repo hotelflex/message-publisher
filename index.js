@@ -2,7 +2,7 @@ const _ = require('lodash')
 const moment = require('moment')
 const rabbit = require('rabbot')
 const EventEmitter = require('events').EventEmitter
-const { createDbPool, createDbConn } = require('@hotelflex/this.db-utils')
+const { createDbPool, createDbConn } = require('@hotelflex/db-utils')
 
 const OPS_TABLE = 'operations'
 const SCAN_INTERVAL = 2000
