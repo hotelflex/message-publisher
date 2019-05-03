@@ -39,12 +39,7 @@ const connectToBroker = (config, logger) => {
   
 
 class MessagePublisher {
-  constructor(rabbitmq, postgres, logger) {
-    this.rabbitmq = rabbitmq
-    this.postgres = postgres
-    this.logger = logger || console
-    this.db = createDbPool(this.postgres, { min: 2, max: 8 })
-    this.pubSubConn = createDbConn(this.postgres)
+  constructor() {
     this.opIdMap = {}
     this.opEmitter = new EventEmitter()
     this.scanForUncommittedOps = this.scanForUncommittedOps.bind(this)
@@ -53,15 +48,20 @@ class MessagePublisher {
     this.listenForInserts = this.listenForInserts.bind(this)
   }
 
-  async start() {
+  async start(config, logger) {
+    this.rabbitmq = config.rabbitmq
+    this.postgres = config.postgres
+    this.logger = logger || console
     try {
       this.logger.info('MessagePublisher: starting up')
+      this.db = createDbPool(this.postgres, { min: 2, max: 8 })
+      this.pubSubConn = createDbConn(this.postgres)
       await connectToBroker(this.rabbitmq, this.logger)
       this.opEmitter.on('op', this.commitOp)
       await this.listenForInserts()
       setInterval(this.scanForUncommittedOps, SCAN_INTERVAL)
-    } catch (error) {
-      console.log(error)
+    } catch (e) {
+      this.logger.error({ error: e.message }, 'MessagePublisher: Error starting up')
       process.exit()
     }
   }
@@ -140,4 +140,4 @@ class MessagePublisher {
   }
 }
 
-module.exports = MessagePublisher
+module.exports = new MessagePublisher()
