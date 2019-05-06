@@ -85,7 +85,7 @@ class MessagePublisher {
         this.opEmitter.emit('op', op)
       })
     } catch(error) {
-      this.logger.error({ error: error.message }
+      this.logger.error({ error: error.message },
         'MessagePublisher: Error scanning for messages')
     } finally {
       this.isScanning = false
@@ -96,12 +96,12 @@ class MessagePublisher {
     try {
       const messages = op.messages ? JSON.parse(op.messages) : []
       if (messages.length > 0) {
-        this.logger.info(
+        this.logger.debug(
           {
             operationId: op.id,
             messages,
           },
-          'publishing messages',
+          `MessagePublisher: Publishing ${messages.length} messages`,
         )
         await this.bulkPublish(messages)
       }
