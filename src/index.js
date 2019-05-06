@@ -40,6 +40,7 @@ const connectToBroker = (config, logger) => {
 
 class MessagePublisher {
   constructor() {
+    this.isScanning = false
     this.opIdMap = {}
     this.opEmitter = new EventEmitter()
     this.scanForUncommittedOps = this.scanForUncommittedOps.bind(this)
@@ -67,20 +68,28 @@ class MessagePublisher {
   }
 
   async scanForUncommittedOps() {
-    const limit = Math.max(40 - Object.keys(this.opIdMap).length, 0)
+    if(this.isScanning) return
+    try {
+      this.isScanning = true
+      const limit = Math.max(40 - Object.keys(this.opIdMap).length, 0)
+      const ops = await this.db
+        .select('id', 'messages')
+        .from(OPS_TABLE)
+        .where('committed', false)
+        .limit(limit)
 
-    const ops = await this.db
-      .select('id', 'messages')
-      .from(OPS_TABLE)
-      .where('committed', false)
-      .limit(limit)
+      ops.forEach(op => {
+        if (this.opIdMap[op.id]) return
 
-    ops.forEach(op => {
-      if (this.opIdMap[op.id]) return
-
-      this.opIdMap[op.id] = true
-      this.opEmitter.emit('op', op)
-    })
+        this.opIdMap[op.id] = true
+        this.opEmitter.emit('op', op)
+      })
+    } catch(error) {
+      this.logger.error({ error: error.message }
+        'MessagePublisher: Error scanning for messages')
+    } finally {
+      this.isScanning = false
+    }
   }
 
   async commitOp(op) {
