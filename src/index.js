@@ -8,18 +8,24 @@ const OPS_TABLE = 'operations'
 const SCAN_INTERVAL = 2000
 
 const connectToBroker = (config, logger) => {
+  
+  rabbit.on('connected', () => {
+    logger.debug('RabbitMQ - Connected.')
+  })
+  rabbit.on('failed', () => {
+    logger.debug('RabbitMQ - Connection lost, reconnecting...')
+  })
   rabbit.on('closed', () => {
-    logger.error('RabbitMQ connection closed')
+    //intentional - no reason for this to happen
+    logger.info('RabbitMQ - Connection closed.')
     process.exit()
   })
   rabbit.on('unreachable', () => {
-    logger.error('RabbitMQ connection unreachable')
+    //unintentional - reconnection attempts have failed
+    logger.error('RabbitMQ - Connection failed.')
     process.exit()
   })
-  rabbit.on('failed', () => {
-    logger.error('RabbitMQ failure')
-    process.exit()
-  })
+
   rabbit.configure({
     connection: Object.assign(
       { name: 'default', replyQueue: false },
