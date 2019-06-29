@@ -1,156 +1,137 @@
-const _ = require('lodash')
-const moment = require('moment')
-const rabbit = require('rabbot')
 const EventEmitter = require('events').EventEmitter
-const { createDbPool, createDbConn } = require('@hotelflex/db-utils')
+const { transaction } = require('objection')
+const { Broker, Publisher } = require('@hotelflex/amqp')
 
-const OPS_TABLE = 'operations'
+const AMQP_OUTBOUND = 'amqp_outbound_messages'
 const SCAN_INTERVAL = 2000
 
-const connectToBroker = (config, logger) => {
-  
-  rabbit.on('connected', () => {
-    logger.debug('RabbitMQ - Connected.')
-  })
-  rabbit.on('failed', () => {
-    logger.debug('RabbitMQ - Connection lost, reconnecting...')
-  })
-  rabbit.on('closed', () => {
-    //intentional - no reason for this to happen
-    logger.info('RabbitMQ - Connection closed.')
-    process.exit()
-  })
-  rabbit.on('unreachable', () => {
-    //unintentional - reconnection attempts have failed
-    logger.error('RabbitMQ - Connection failed.')
-    process.exit()
-  })
+const hasArgs = (rabbitmq, knex, dbConn) =>
+  Boolean(rabbitmq && rabbitmq.host && rabbitmq.port && knex && dbConn)
 
-  rabbit.configure({
-    connection: Object.assign(
-      { name: 'default', replyQueue: false },
-      _.omit(config, 'exchange'),
-    ),
-    exchanges: [
-      {
-        name: config.exchange,
-        type: 'topic',
-        durable: true,
-        persistent: true,
-        publishTimeout: 2000,
-      },
-    ],
-  })
-}
-  
+const ISOToUnix = time => (time ? (new Date(time).getTime() / 1000) | 0 : null)
 
 class MessagePublisher {
   constructor() {
     this.isScanning = false
-    this.opIdMap = {}
-    this.opEmitter = new EventEmitter()
-    this.scanForUncommittedOps = this.scanForUncommittedOps.bind(this)
-    this.commitOp = this.commitOp.bind(this)
-    this.bulkPublish = this.bulkPublish.bind(this)
-    this.listenForInserts = this.listenForInserts.bind(this)
+    this.msgIdMap = {}
+    this.msgEmitter = new EventEmitter()
+    this.scan = this.scan.bind(this)
+    this.commitMsg = this.commitMsg.bind(this)
   }
 
-  async start(config, logger) {
-    this.rabbitmq = config.rabbitmq
-    this.postgres = config.postgres
-    this.logger = logger || console
+  async start(rabbitmq, knex, dbConn, logger) {
     try {
-      this.logger.info('MessagePublisher: starting up')
-      this.db = createDbPool(this.postgres, { min: 2, max: 8 })
-      this.pubSubConn = createDbConn(this.postgres)
-      await connectToBroker(this.rabbitmq, this.logger)
-      this.opEmitter.on('op', this.commitOp)
+      if (!hasArgs(rabbitmq, knex, dbConn))
+        throw new Error('Missing required arguments')
+      this.rabbitmq = rabbitmq
+      this.knex = knex
+      this.dbConn = dbConn
+      this.log = logger || console
+      this.msgEmitter.on('msg', this.commitMsg)
+
+      this.Publisher = new Publisher({ confirm: true }, this.log)
+      await Broker.connect(
+        this.rabbitmq,
+        this.log,
+      )
+      await Broker.registerPublisher(this.Publisher)
+
       await this.listenForInserts()
-      setInterval(this.scanForUncommittedOps, SCAN_INTERVAL)
+      setInterval(this.scan, SCAN_INTERVAL)
     } catch (e) {
-      this.logger.error({ error: e.message }, 'MessagePublisher: Error starting up')
+      this.log.error(
+        {
+          error: e.message,
+        },
+        '[MessagePublisher] Error starting up',
+      )
       process.exit()
     }
   }
 
-  async scanForUncommittedOps() {
-    if(this.isScanning) return
+  async scan() {
+    if (this.isScanning) return
     try {
       this.isScanning = true
-      const limit = Math.max(40 - Object.keys(this.opIdMap).length, 0)
-      const ops = await this.db
-        .select('id', 'messages')
-        .from(OPS_TABLE)
-        .where('committed', false)
+      const limit = Math.max(40 - Object.keys(this.msgIdMap).length, 0)
+      const messages = await this.knex(AMQP_OUTBOUND)
+        .select('id')
+        .where('published', false)
         .limit(limit)
 
-      ops.forEach(op => {
-        if (this.opIdMap[op.id]) return
+      messages.forEach(msg => {
+        if (this.msgIdMap[msg.id]) return
 
-        this.opIdMap[op.id] = true
-        this.opEmitter.emit('op', op)
+        this.msgIdMap[msg.id] = true
+        this.msgEmitter.emit('msg', msg)
       })
-    } catch(error) {
-      this.logger.error({ error: error.message },
-        'MessagePublisher: Error scanning for messages')
+    } catch (err) {
+      this.log.error(
+        {
+          error: err.message,
+        },
+        '[MessagePublisher] Error scanning for messages',
+      )
     } finally {
       this.isScanning = false
     }
   }
 
-  async commitOp(op) {
+  async commitMsg(msg) {
     try {
-      const messages = op.messages ? JSON.parse(op.messages) : []
-      if (messages.length > 0) {
-        this.logger.debug(
-          {
-            operationId: op.id,
-            messages,
-          },
-          `MessagePublisher: Publishing ${messages.length} messages`,
-        )
-        await this.bulkPublish(messages)
-      }
+      await transaction(this.knex, async trx => {
+        const message = await trx(AMQP_OUTBOUND)
+          .forUpdate()
+          .where('id', msg.id)
+          .first()
 
-      await this.db(OPS_TABLE)
-        .where('id', op.id)
-        .update({ committed: true, messages: null })
+        if (message && !message.published) {
+          await this.publish(message)
+          await trx(AMQP_OUTBOUND)
+            .returning('id')
+            .where('id', msg.id)
+            .update({ published: true })
 
-      delete this.opIdMap[op.id]
-    } catch (error) {
-      console.log(error)
-      process.exit()
+          this.log.debug('[MessagePublisher] Published ' + message.key)
+        }
+      })
+    } catch (err) {
+      this.log.error(
+        {
+          error: err.message,
+        },
+        '[MessagePublisher] Error publishing msg ' + msg.id,
+      )
+    } finally {
+      delete this.msgIdMap[msg.id]
     }
   }
 
-  bulkPublish(msgs) {
-    return rabbit.bulkPublish({
-      [this.rabbitmq.exchange]: msgs.map(m => ({
-        messageId: m.id,
-        type: m.topic,
-        headers: {
-          'transaction-id': m.transactionId,
-          'operation-id': m.operationId,
-        },
-        timestamp: moment(m.timestamp).unix(),
-        body: m.body,
-      })),
-    })
+  async publish(message) {
+    const opts = {
+      persistent: true,
+      messageId: message.id,
+      correlationId: message.correlationId,
+      timestamp: ISOToUnix(message.timestamp),
+    }
+    await this.Publisher.publish(
+      message.key,
+      JSON.stringify(message.body),
+      opts,
+    )
   }
 
   async listenForInserts() {
-    await this.pubSubConn.query('LISTEN operations_insert')
-    this.pubSubConn.on('notification', async ({ payload }) => {
-      const _ops = await this.db
-        .select()
-        .from(OPS_TABLE)
+    await this.dbConn.query('LISTEN amqp_outbound_messages_insert')
+    this.dbConn.on('notification', async ({ payload }) => {
+      const msg = await this.knex(AMQP_OUTBOUND)
         .where('id', payload)
-      const op = _ops[0]
+        .first()
 
-      if (this.opIdMap[op.id] || op.committed) return
+      if (this.msgIdMap[msg.id] || msg.published) return
 
-      this.opIdMap[op.id] = true
-      this.opEmitter.emit('op', op)
+      this.msgIdMap[msg.id] = true
+      this.msgEmitter.emit('msg', msg)
     })
   }
 }
