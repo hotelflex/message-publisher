@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@hotelflex/amqp": "git+https://github.com/hotelflex/amqp.git#1.0.0",
+    "@hotelflex/id": "git+https://github.com/hotelflex/id.git#1.1.1",
     "events": "^3.0.0",
     "objection": "^1.6.9"
   }

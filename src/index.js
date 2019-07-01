@@ -1,4 +1,5 @@
 const EventEmitter = require('events').EventEmitter
+const Id = require('@hotelflex/id')
 const { transaction } = require('objection')
 const { Broker, Publisher } = require('@hotelflex/amqp')
 
@@ -113,6 +114,11 @@ class MessagePublisher {
       messageId: message.id,
       correlationId: message.correlationId,
       timestamp: ISOToUnix(message.timestamp),
+      //for backwards compatibility
+      headers: {
+        'operation-id': Id.create(),
+        'transaction-id': message.correlationId,
+      },
     }
     await this.Publisher.publish(
       message.key,
