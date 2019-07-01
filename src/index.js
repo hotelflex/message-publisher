@@ -5,8 +5,8 @@ const { Broker, Publisher } = require('@hotelflex/amqp')
 const AMQP_OUTBOUND = 'amqp_outbound_messages'
 const SCAN_INTERVAL = 2000
 
-const hasArgs = (rabbitmq, knex, dbConn) =>
-  Boolean(rabbitmq && rabbitmq.host && rabbitmq.port && knex && dbConn)
+const hasArgs = (rabbitmq, knexClient, pgClient) =>
+  Boolean(rabbitmq && rabbitmq.host && rabbitmq.port && knexClient && pgClient)
 
 const ISOToUnix = time => (time ? (new Date(time).getTime() / 1000) | 0 : null)
 
@@ -19,13 +19,13 @@ class MessagePublisher {
     this.commitMsg = this.commitMsg.bind(this)
   }
 
-  async start(rabbitmq, knex, dbConn, logger) {
+  async start(rabbitmq, knexClient, pgClient, logger) {
     try {
-      if (!hasArgs(rabbitmq, knex, dbConn))
+      if (!hasArgs(rabbitmq, knexClient, pgClient))
         throw new Error('Missing required arguments')
       this.rabbitmq = rabbitmq
-      this.knex = knex
-      this.dbConn = dbConn
+      this.knex = knexClient
+      this.pgClient = pgClient
       this.log = logger || console
       this.msgEmitter.on('msg', this.commitMsg)
 
@@ -122,8 +122,8 @@ class MessagePublisher {
   }
 
   async listenForInserts() {
-    await this.dbConn.query('LISTEN amqp_outbound_messages_insert')
-    this.dbConn.on('notification', async ({ payload }) => {
+    await this.pgClient.query('LISTEN amqp_outbound_messages_insert')
+    this.pgClient.on('notification', async ({ payload }) => {
       const msg = await this.knex(AMQP_OUTBOUND)
         .where('id', payload)
         .first()
