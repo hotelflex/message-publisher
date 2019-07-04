@@ -7,7 +7,9 @@ const AMQP_OUTBOUND = 'amqp_outbound_messages'
 const SCAN_INTERVAL = 2000
 
 const hasArgs = (rabbitmq, knexClient, pgClient) =>
-  Boolean(rabbitmq && rabbitmq.host && rabbitmq.port && knexClient && pgClient)
+  Boolean(
+    rabbitmq && rabbitmq.hostname && rabbitmq.port && knexClient && pgClient,
+  )
 
 const ISOToUnix = time => (time ? (new Date(time).getTime() / 1000) | 0 : null)
 
@@ -22,12 +24,12 @@ class MessagePublisher {
 
   async start(rabbitmq, knexClient, pgClient, logger) {
     try {
+      this.log = logger || console
       if (!hasArgs(rabbitmq, knexClient, pgClient))
         throw new Error('Missing required arguments')
       this.rabbitmq = rabbitmq
       this.knex = knexClient
       this.pgClient = pgClient
-      this.log = logger || console
       this.msgEmitter.on('msg', this.commitMsg)
 
       this.Publisher = new Publisher({ confirm: true }, this.log)
