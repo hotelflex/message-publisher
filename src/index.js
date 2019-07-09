@@ -115,6 +115,7 @@ class MessagePublisher {
       persistent: true,
       messageId: message.id,
       correlationId: message.correlationId,
+      contentType: 'application/json',
       timestamp: ISOToUnix(message.timestamp),
       //for backwards compatibility
       headers: {
